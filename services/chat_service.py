@@ -25,7 +25,7 @@ class ChatService:
         self.conversation_service = conversation_service
         self.message_service = message_service
     
-    def send(self, db: Session, request: ChatRequest):
+    async def send(self, db: Session, request: ChatRequest):
         conversation = self._update_conversation(db, request)
 
         try:
@@ -42,11 +42,13 @@ class ChatService:
 
             json_string = database_schema.model_dump_json(indent=2, exclude_none=True)
 
-            prompt = self._build_prompt(db=db, database_schema=json_string, message=request.prompt)
+            prompt = self._build_prompt(db, json_string,request.prompt)
 
-            response = self._process_with_ai(db=db, ai_model_id=request.ai_model_id, conversation_id=conversation.id, prompt=prompt)
+            # _process_with_ai is async — await it so execution completes before returning
+            response = await self._process_with_ai(db, request.ai_model_id, conversation.id, prompt)
 
-            return ChatResponse(message=response)
+            # _process_with_ai already returns a ChatResponse
+            return response
         except HTTPException:
             raise
         except Exception as e:
@@ -71,7 +73,7 @@ class ChatService:
         return prompt_template
 
     async def _process_with_ai(self, db: Session, ai_model_id: int, conversation_id: int, prompt: str):
-        ai_model = ai_model_service.get(ai_model_id)
+        ai_model = ai_model_service.get(db, ai_model_id)
 
         if not ai_model:
             raise HTTPException(
@@ -79,7 +81,7 @@ class ChatService:
                 detail="Modelo de IA não encontrado"
             )
         
-        messages = self._messages_to_dict(self.message_service.get_by_conversation_id(conversation_id))
+        messages = self._messages_to_dict(self.message_service.get_by_conversation_id(db, conversation_id))
         response = ""
         
         try:
@@ -145,15 +147,15 @@ class ChatService:
                 )
             )
         
-        self.message_service.create(
-            db,
-            MessageCreate(
-                text=parameter.value,
-                created_at=now,
-                agent="system",
-                conversation_id=conversation.id
+            self.message_service.create(
+                db,
+                MessageCreate(
+                    text=parameter.value,
+                    created_at=now,
+                    agent="system",
+                    conversation_id=conversation.id
+                )
             )
-        )
 
         self.message_service.create(
             db,
